@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from dl_alpha_bench.data import CorporateActionAdjuster, DatasetContract
+from dl_alpha_bench.utils.config import parse_config_bool
 
 
 @dataclass
@@ -53,7 +54,11 @@ class DatasetBuilder:
             feature_cols = [c for c in frame.columns if c.startswith("feat_")]
 
         mask_col = config.get("mask_column", "tradable")
-        apply_mask = bool(config.get("apply_mask", True))
+        apply_mask = parse_config_bool(
+            config.get("apply_mask"),
+            default=True,
+            field_name="dataset.apply_mask",
+        )
         if mask_col not in frame.columns:
             frame[mask_col] = True
         frame[mask_col] = frame[mask_col].fillna(False).astype(bool)
@@ -73,7 +78,11 @@ class DatasetBuilder:
     def _build_features(self, frame: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
         methods = config.get("feature_generators", ["ret_1", "ret_5", "vol_z"])
         params = config.get("feature_params", {})
-        strict = bool(config.get("strict_feature_requirements", True))
+        strict = parse_config_bool(
+            config.get("strict_feature_requirements"),
+            default=True,
+            field_name="dataset.strict_feature_requirements",
+        )
 
         vol_z_window = int(params.get("vol_z_window", 20))
         trade_intensity_window = int(params.get("trade_intensity_window", 20))
@@ -85,7 +94,12 @@ class DatasetBuilder:
             frame["feat_ret_1"] = grouped["close"].pct_change(1)
         if "ret_5" in methods:
             frame["feat_ret_5"] = grouped["close"].pct_change(5)
-        if "vol_z" in methods and "volume" in frame.columns:
+        if "vol_z" in methods and self._has_columns(
+            frame,
+            ["volume"],
+            "vol_z",
+            strict,
+        ):
             rolling_mean = (
                 grouped["volume"].rolling(vol_z_window).mean().reset_index(level=0, drop=True)
             )

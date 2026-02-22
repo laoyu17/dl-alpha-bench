@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -13,14 +13,16 @@ import pandas as pd
 from dl_alpha_bench.backtest import EventBacktester
 from dl_alpha_bench.cv import PurgedKFoldSplitter, WalkForwardSplitter, validate_no_time_overlap
 from dl_alpha_bench.data import (
+    DataConnectorError,
     JoinQuantConnector,
     LocalMockConnector,
     RiceQuantConnector,
+    validate_data_contract,
 )
 from dl_alpha_bench.dataset import DatasetBuilder
 from dl_alpha_bench.eval import summarize_feature_explainability, summarize_fold_metrics
 from dl_alpha_bench.train import TrainConfig, Trainer
-from dl_alpha_bench.utils.config import stable_hash
+from dl_alpha_bench.utils.config import parse_config_bool, stable_hash
 from dl_alpha_bench.utils.seed import set_global_seed
 
 from .errors import ConfigValidationError, LeakageGuardError
@@ -31,12 +33,18 @@ _ALLOWED_CV_METHODS = {"purged_kfold", "walk_forward"}
 
 
 class ExperimentRunner:
-    def __init__(self, tracker: ExperimentTracker | None = None):
+    def __init__(
+        self,
+        tracker: ExperimentTracker | None = None,
+        progress_callback: Callable[[str], None] | None = None,
+    ):
         artifact_root = os.getenv("DL_ALPHA_BENCH_ARTIFACT_DIR", "artifacts")
         self.tracker = tracker or ExperimentTracker(artifact_root)
+        self._progress_callback = progress_callback
 
     def run(self, config: dict[str, Any]) -> ExperimentResult:
         self._validate_config(config)
+        self._emit("config validated")
 
         seed = int(config.get("seed", 42))
         set_global_seed(seed)
@@ -44,15 +52,48 @@ class ExperimentRunner:
         experiment_id = config.get("experiment_id", f"exp-{config_hash}")
 
         runtime_cfg = config.get("runtime", {})
-        fail_on_leakage = bool(runtime_cfg.get("fail_on_leakage", True))
-        validate_config_only = bool(runtime_cfg.get("validate_config_only", False))
+        fail_on_leakage = self._parse_bool(
+            runtime_cfg.get("fail_on_leakage"),
+            field_name="runtime.fail_on_leakage",
+            default=True,
+        )
+        validate_config_only = self._parse_bool(
+            runtime_cfg.get("validate_config_only"),
+            field_name="runtime.validate_config_only",
+            default=False,
+        )
+        allow_offline_mock_fallback = self._parse_bool(
+            runtime_cfg.get("allow_offline_mock_fallback"),
+            field_name="runtime.allow_offline_mock_fallback",
+            default=False,
+        )
+        source = str(config.get("data", {}).get("source", "mock"))
+        fallback_used = False
+        fallback_reason: str | None = None
 
         run_dir = self.tracker.start(experiment_id)
         self.tracker.log_config(run_dir, config)
+        self._emit(f"artifact directory prepared: {run_dir}")
 
-        data_frame, actions = self._load_data_and_actions(config)
-        source = str(config.get("data", {}).get("source", "mock"))
-        self._validate_loaded_data(frame=data_frame, source=source)
+        self._emit("loading market data")
+        loaded_source = source
+        try:
+            data_frame, actions = self._load_data_and_actions(config)
+        except DataConnectorError as exc:
+            if source in {"joinquant", "ricequant"} and allow_offline_mock_fallback:
+                fallback_used = True
+                fallback_reason = f"{source} connector failure: {exc}"
+                loaded_source = "mock"
+                self._emit(f"{fallback_reason}; fallback to local mock data")
+                data_frame, actions = self._load_mock_data_and_actions(config)
+            else:
+                raise
+
+        self._validate_loaded_data(frame=data_frame, source=loaded_source)
+        data_status = f"data contract validated: {len(data_frame)} rows from {loaded_source}"
+        if fallback_used:
+            data_status = f"{data_status} (fallback enabled)"
+        self._emit(data_status)
 
         if validate_config_only:
             result = self._make_blocked_result(
@@ -63,11 +104,15 @@ class ExperimentRunner:
                 leakage_passed=True,
                 leakage_details=[],
                 failure_reason="validate_config_only",
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
             )
             self.tracker.log_result(run_dir, result)
+            self._emit("validate_config_only enabled, run blocked before training")
             return result
 
         dataset_cfg = config.get("dataset", {})
+        self._emit("building dataset bundle")
         try:
             dataset = DatasetBuilder().build(data_frame, dataset_cfg, actions=actions)
         except (KeyError, TypeError, ValueError) as exc:
@@ -81,10 +126,15 @@ class ExperimentRunner:
             raise ConfigValidationError("dataset produced no usable feature columns")
         if not dataset.label_columns:
             raise ConfigValidationError("dataset produced no usable label columns")
+        self._emit(
+            f"dataset ready: rows={len(dataset.frame)}, "
+            f"features={len(dataset.feature_columns)}, labels={len(dataset.label_columns)}"
+        )
 
         split_kind = config.get("cv", {}).get("method", "purged_kfold")
         split_cfg = config.get("cv", {})
         label_horizon = int(dataset_cfg.get("label_horizons", [1])[0])
+        self._emit(f"building cv splits ({split_kind})")
         if split_kind == "walk_forward":
             splitter = WalkForwardSplitter(
                 train_window=int(split_cfg.get("train_window", 120)),
@@ -105,6 +155,7 @@ class ExperimentRunner:
 
         if not splits:
             raise ConfigValidationError("no valid CV split generated")
+        self._emit(f"generated {len(splits)} splits")
 
         leakage_details: list[str] = []
         leakage_passed = True
@@ -120,6 +171,11 @@ class ExperimentRunner:
                 leakage_details.extend(report.details)
 
         leakage_details = sorted(set(leakage_details))
+        self._emit(
+            "leakage validation passed"
+            if leakage_passed
+            else f"leakage validation failed ({len(leakage_details)} issue(s))"
+        )
         if not leakage_passed and fail_on_leakage:
             failure_reason = self._build_leakage_failure_reason(leakage_details)
             blocked_result = self._make_blocked_result(
@@ -130,8 +186,11 @@ class ExperimentRunner:
                 leakage_passed=False,
                 leakage_details=leakage_details,
                 failure_reason=failure_reason,
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
             )
             self.tracker.log_result(run_dir, blocked_result)
+            self._emit(f"run blocked by leakage guard: {failure_reason}")
             raise LeakageGuardError(f"{failure_reason}; artifact={run_dir}")
 
         train_cfg = config.get("train", {})
@@ -145,14 +204,21 @@ class ExperimentRunner:
             )
         )
 
+        self._emit("training model across cv folds")
         x = dataset.features()
         y = dataset.labels()[:, 0]
         fold_results = trainer.fit_cv(x, y, splits)
         metric_summary = summarize_fold_metrics(fold_results)
+        self._emit("training complete")
         explain_cfg = config.get("eval", {}).get("explainability", {})
-        explain_enabled = bool(explain_cfg.get("enabled", True))
+        explain_enabled = self._parse_bool(
+            explain_cfg.get("enabled"),
+            field_name="eval.explainability.enabled",
+            default=True,
+        )
         feature_explainability: list[dict[str, Any]] = []
         if explain_enabled:
+            self._emit("computing feature explainability")
             feature_explainability = summarize_feature_explainability(
                 frame=dataset.frame,
                 feature_columns=dataset.feature_columns,
@@ -164,6 +230,7 @@ class ExperimentRunner:
             if top_k is not None:
                 feature_explainability = feature_explainability[: max(1, int(top_k))]
             self.tracker.log_explainability(run_dir, feature_explainability)
+            self._emit(f"explainability saved ({len(feature_explainability)} feature rows)")
 
         pred_col = "pred_score"
         valid_frame = dataset.frame.copy()
@@ -176,6 +243,7 @@ class ExperimentRunner:
             top_frac=float(back_cfg.get("top_frac", 0.2)),
             trading_cost=float(back_cfg.get("trading_cost", 0.0005)),
         )
+        self._emit("running backtest")
         back_summary = backtester.run(
             valid_frame.dropna(subset=[pred_col]),
             pred_col,
@@ -199,8 +267,11 @@ class ExperimentRunner:
             artifact_dir=str(run_dir),
             status="success",
             failure_reason=None,
+            fallback_used=fallback_used,
+            fallback_reason=fallback_reason,
         )
         self.tracker.log_result(run_dir, result)
+        self._emit("result saved")
         return result
 
     def _validate_config(self, config: dict[str, Any]) -> None:
@@ -294,21 +365,69 @@ class ExperimentRunner:
         runtime_cfg = config.get("runtime", {})
         if runtime_cfg and not isinstance(runtime_cfg, dict):
             raise ConfigValidationError("config.runtime must be a dict when provided")
+        self._parse_bool(
+            runtime_cfg.get("fail_on_leakage"),
+            field_name="runtime.fail_on_leakage",
+            default=True,
+        )
+        self._parse_bool(
+            runtime_cfg.get("validate_config_only"),
+            field_name="runtime.validate_config_only",
+            default=False,
+        )
+        self._parse_bool(
+            runtime_cfg.get("allow_offline_mock_fallback"),
+            field_name="runtime.allow_offline_mock_fallback",
+            default=False,
+        )
+
+        self._parse_bool(
+            dataset_cfg.get("apply_mask"),
+            field_name="dataset.apply_mask",
+            default=True,
+        )
+        self._parse_bool(
+            dataset_cfg.get("strict_feature_requirements"),
+            field_name="dataset.strict_feature_requirements",
+            default=True,
+        )
+
+        eval_cfg = config.get("eval", {})
+        if eval_cfg and not isinstance(eval_cfg, dict):
+            raise ConfigValidationError("config.eval must be a dict when provided")
+        explain_cfg = eval_cfg.get("explainability", {})
+        if explain_cfg and not isinstance(explain_cfg, dict):
+            raise ConfigValidationError("config.eval.explainability must be a dict when provided")
+        self._parse_bool(
+            explain_cfg.get("enabled"),
+            field_name="eval.explainability.enabled",
+            default=True,
+        )
 
     def _validate_loaded_data(self, frame: pd.DataFrame, source: str) -> None:
         if not isinstance(frame, pd.DataFrame):
             raise ConfigValidationError(f"{source} returned non-DataFrame payload")
         if frame.empty:
             raise ConfigValidationError(f"{source} returned empty dataset")
+        try:
+            validate_data_contract(frame)
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc)) from exc
 
-        required = {"symbol", "timestamp", "close"}
-        missing = sorted(required.difference(frame.columns))
-        if missing:
-            raise ConfigValidationError(f"input data missing required columns: {missing}")
+    def _emit(self, message: str) -> None:
+        if self._progress_callback is None:
+            return
+        self._progress_callback(message)
 
-        timestamps = pd.to_datetime(frame["timestamp"], errors="coerce")
-        if timestamps.isna().any():
-            raise ConfigValidationError("input data contains unparseable timestamp values")
+    def _parse_bool(self, value: Any, *, field_name: str, default: bool) -> bool:
+        try:
+            return parse_config_bool(
+                value,
+                default=default,
+                field_name=field_name,
+            )
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc)) from exc
 
     def _make_blocked_result(
         self,
@@ -319,6 +438,8 @@ class ExperimentRunner:
         leakage_passed: bool,
         leakage_details: list[str],
         failure_reason: str,
+        fallback_used: bool = False,
+        fallback_reason: str | None = None,
     ) -> ExperimentResult:
         return ExperimentResult(
             experiment_id=experiment_id,
@@ -332,6 +453,8 @@ class ExperimentRunner:
             artifact_dir=str(artifact_dir),
             status="blocked",
             failure_reason=failure_reason,
+            fallback_used=fallback_used,
+            fallback_reason=fallback_reason,
         )
 
     def _build_leakage_failure_reason(self, details: list[str]) -> str:
@@ -405,7 +528,19 @@ class ExperimentRunner:
             actions = connector.fetch_corporate_actions(start=start, end=end, symbols=symbols)
             return frame, actions
 
-        # default synthetic demo path for deterministic CI and local reproducibility.
+        # Default synthetic demo path for deterministic CI and local reproducibility.
+        return self._load_mock_data_and_actions(config)
+
+    def _load_mock_data_and_actions(
+        self,
+        config: dict[str, Any],
+    ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+        data_cfg = config.get("data", {})
+        fields = data_cfg.get("fields")
+        symbols = data_cfg.get("symbols", [])
+        start = data_cfg.get("start", "2020-01-01")
+        end = data_cfg.get("end", "2022-01-01")
+        freq = data_cfg.get("freq", "1d")
         frame = self._make_synthetic_data(
             start=start,
             periods=int(data_cfg.get("periods", 260)),

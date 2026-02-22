@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -37,6 +38,7 @@ except ImportError as exc:  # pragma: no cover
 class ExperimentWorker(QThread):
     finished_ok = pyqtSignal(dict)
     failed = pyqtSignal(str)
+    log_line = pyqtSignal(str)
 
     def __init__(self, config_path: str):
         super().__init__()
@@ -44,8 +46,10 @@ class ExperimentWorker(QThread):
 
     def run(self) -> None:  # noqa: D401
         try:
+            self.log_line.emit(f"loading config: {self.config_path}")
             cfg = load_yaml(self.config_path)
-            res = ExperimentRunner().run(cfg)
+            runner = ExperimentRunner(progress_callback=self.log_line.emit)
+            res = runner.run(cfg)
             self.finished_ok.emit(res.__dict__)
         except Exception as exc:  # pragma: no cover
             self.failed.emit(str(exc))
@@ -193,6 +197,7 @@ class MainWindow(QMainWindow):
         self.worker = ExperimentWorker(path)
         self.worker.finished_ok.connect(self._on_finished)
         self.worker.failed.connect(self._on_failed)
+        self.worker.log_line.connect(self._on_worker_log)
         self.worker.start()
 
     def _on_finished(self, payload: dict) -> None:
@@ -211,6 +216,9 @@ class MainWindow(QMainWindow):
         self.failure_label.setText(f"Failure: {message}")
         self.log.appendPlainText(f"[ERROR] {message}")
         QMessageBox.critical(self, "Experiment failed", message)
+
+    def _on_worker_log(self, message: str) -> None:
+        self.log.appendPlainText(f"[INFO] {message}")
 
     def _fill_metric_table(self, payload: dict) -> None:
         merged = {}
@@ -255,12 +263,12 @@ class MainWindow(QMainWindow):
             self.explain_table.setItem(row_id, 7, QTableWidgetItem(obs))
 
     def load_latest_explainability(self) -> None:
-        art = Path("artifacts")
+        art = self._artifact_root()
         latest_path: Path | None = None
         latest_ts = -1.0
         if not art.exists():
             return
-        for result_path in art.glob("*/result.json"):
+        for result_path in self._iter_result_paths(art):
             try:
                 mtime = result_path.stat().st_mtime
             except OSError:
@@ -288,6 +296,17 @@ class MainWindow(QMainWindow):
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    def _artifact_root(self) -> Path:
+        root = os.getenv("DL_ALPHA_BENCH_ARTIFACT_DIR", "artifacts")
+        return Path(root)
+
+    def _iter_result_paths(self, artifact_root: Path) -> list[Path]:
+        paths = list(artifact_root.glob("*/runs/*/result.json"))
+        if paths:
+            return paths
+        # Backward-compatible fallback for older artifact layout.
+        return list(artifact_root.glob("*/result.json"))
 
     def refresh_config_summary(self) -> None:
         path = self.config_path.text().strip()
@@ -317,27 +336,34 @@ class MainWindow(QMainWindow):
         self.dataset_summary.setPlainText("\\n".join(lines))
 
     def refresh_compare_table(self) -> None:
-        art = Path("artifacts")
-        rows: list[tuple[str, float, float]] = []
+        art = self._artifact_root()
+        rows: list[tuple[str, float, float, str]] = []
         if art.exists():
-            for result_path in art.glob("*/result.json"):
+            for result_path in self._iter_result_paths(art):
                 try:
                     payload = json.loads(result_path.read_text(encoding="utf-8"))
                     metrics = payload.get("metrics") or {}
                     backtest = payload.get("backtest") or {}
+                    if result_path.parent.parent.name == "runs":
+                        run_id = result_path.parent.name
+                    else:
+                        run_id = "latest"
+                    exp_base = payload.get("experiment_id", result_path.parent.name)
+                    exp_id = exp_base if run_id == "latest" else f"{exp_base}#{run_id[-8:]}"
                     rows.append(
                         (
-                            payload.get("experiment_id", result_path.parent.name),
+                            exp_id,
                             self._safe_float(metrics.get("ic_mean"), 0.0),
                             self._safe_float(backtest.get("sharpe"), 0.0),
+                            payload.get("created_at", ""),
                         )
                     )
                 except Exception:
                     continue
 
-        rows.sort(key=lambda r: r[1], reverse=True)
+        rows.sort(key=lambda r: (r[1], r[3]), reverse=True)
         self.compare_table.setRowCount(len(rows))
-        for i, (exp_id, ic_val, sharpe) in enumerate(rows):
+        for i, (exp_id, ic_val, sharpe, _) in enumerate(rows):
             self.compare_table.setItem(i, 0, QTableWidgetItem(exp_id))
             self.compare_table.setItem(i, 1, QTableWidgetItem(f"{ic_val:.6f}"))
             self.compare_table.setItem(i, 2, QTableWidgetItem(f"{sharpe:.6f}"))

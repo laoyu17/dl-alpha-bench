@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from dl_alpha_bench.dataset import DatasetBuilder
 
@@ -68,3 +69,43 @@ def test_dataset_builder_can_keep_untradable_rows_when_apply_mask_disabled() -> 
 
     ds = DatasetBuilder().build(frame, cfg)
     assert not ds.frame["tradable"].all()
+
+
+def test_dataset_builder_accepts_string_false_for_apply_mask() -> None:
+    frame = _make_frame()
+    frame.loc[frame.index[10:20], "tradable"] = False
+    cfg = {
+        "feature_generators": ["ret_1"],
+        "feature_columns": ["feat_ret_1"],
+        "label_horizons": [1],
+        "apply_mask": "false",
+    }
+
+    ds = DatasetBuilder().build(frame, cfg)
+    assert not ds.frame["tradable"].all()
+
+
+def test_dataset_builder_rejects_invalid_apply_mask_value() -> None:
+    frame = _make_frame()
+    cfg = {
+        "feature_generators": ["ret_1"],
+        "feature_columns": ["feat_ret_1"],
+        "label_horizons": [1],
+        "apply_mask": "not-a-bool",
+    }
+
+    with pytest.raises(ValueError, match="dataset.apply_mask"):
+        DatasetBuilder().build(frame, cfg)
+
+
+def test_dataset_builder_strict_vol_z_requires_volume() -> None:
+    frame = _make_frame().drop(columns=["volume"])
+    cfg = {
+        "feature_generators": ["vol_z"],
+        "feature_columns": ["feat_vol_z"],
+        "label_horizons": [1],
+        "strict_feature_requirements": True,
+    }
+
+    with pytest.raises(ValueError, match="vol_z"):
+        DatasetBuilder().build(frame, cfg)

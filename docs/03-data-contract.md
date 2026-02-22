@@ -18,6 +18,16 @@
 - `apply_mask` 默认为 `true`，表示训练与回测均仅保留 `mask_column == true` 的样本
 - 仅在明确需要诊断不可交易样本时，将 `apply_mask` 设为 `false`
 
+## 布尔配置解析规则（新增）
+
+- 以下字段支持 `true/false/1/0`（布尔、数字或字符串），其他取值会被视为配置错误并阻断运行：
+  - `dataset.apply_mask`
+  - `dataset.strict_feature_requirements`
+  - `runtime.fail_on_leakage`
+  - `runtime.validate_config_only`
+  - `runtime.allow_offline_mock_fallback`
+  - `eval.explainability.enabled`
+
 ## 标签定义
 
 - `label_fwd_ret_h = close(t+h)/close(t)-1`
@@ -27,6 +37,7 @@
 
 - `runtime.fail_on_leakage`：默认 `true`，若任一 split 泄露校验失败则阻断训练
 - `runtime.validate_config_only`：默认 `false`，设为 `true` 时仅做配置与数据契约检查并输出 blocked 结果
+- `runtime.allow_offline_mock_fallback`：默认 `false`，仅在 `joinquant/ricequant` 拉取失败时允许降级到本地 mock 数据
 
 ## 高频特征输入约束
 
@@ -39,5 +50,5 @@
 ## 企业行动接口
 
 - 在线连接器会在实验中调用 `fetch_corporate_actions()` 获取 `adjust_factor`
-- 通过 `CorporateActionAdjuster.apply()` 进行复权/调整
+- 通过 `CorporateActionAdjuster.apply()` 进行复权/调整（会校验 `(symbol,timestamp)` 唯一性，冲突因子将报错）
 - 默认 identity，不引入隐式改动

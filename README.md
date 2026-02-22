@@ -80,10 +80,14 @@ dl-alpha-bench-gui
 
 - 默认 `runtime.fail_on_leakage=true`：若 split 出现泄露风险，会写入 blocked artifact 并中止训练
 - 可通过 `runtime.validate_config_only=true` 先做配置/数据契约预检查（不训练）
+- 可通过 `runtime.allow_offline_mock_fallback=true` 在在线连接器失败时降级到本地 mock 数据
+- 布尔配置统一支持 `true/false/1/0`；非法取值会被视为配置错误并阻断运行
 
 ## Explainability panel
 
 - GUI 新增 `Explainability` 面板，按因子展示：`IC/RankIC/IC_IR/RankIC_IR/分位收益贡献`
-- 实验会在 artifact 目录输出：
+- 实验会在 `artifacts/<exp_id>/runs/<run_id>/` 输出：
   - `result.json`（包含 `feature_explainability` 字段）
   - `feature_explainability.csv`（面试展示可直接打开）
+  - `config.yaml`（本次运行配置快照）
+- `artifacts/<exp_id>/latest_run.txt` 记录最近一次运行的 `run_id`

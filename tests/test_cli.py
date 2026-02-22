@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 from dl_alpha_bench import cli
 from dl_alpha_bench.utils.config import dump_yaml, load_yaml
@@ -22,7 +23,9 @@ def test_cli_main_outputs_json_payload(tmp_path, monkeypatch) -> None:
     finally:
         sys.argv = old_argv
 
-    result_path = (tmp_path / cfg["experiment_id"] / "result.json")
+    result_candidates = sorted((tmp_path / cfg["experiment_id"] / "runs").glob("*/result.json"))
+    assert result_candidates
+    result_path = Path(result_candidates[-1])
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["experiment_id"] == "pytest-cli-exp"
     assert payload["status"] == "success"

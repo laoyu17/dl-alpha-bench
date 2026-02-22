@@ -5,8 +5,10 @@ from __future__ import annotations
 import csv
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from dl_alpha_bench.utils.config import dump_yaml
 from dl_alpha_bench.utils.time_utils import utc_now_iso
@@ -25,6 +27,8 @@ class ExperimentResult:
     artifact_dir: str
     status: str = "success"
     failure_reason: str | None = None
+    fallback_used: bool = False
+    fallback_reason: str | None = None
 
 
 class ExperimentTracker:
@@ -33,8 +37,11 @@ class ExperimentTracker:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def start(self, experiment_id: str) -> Path:
-        run_dir = self.root / experiment_id
+        run_id = self._make_run_id()
+        run_dir = self.root / experiment_id / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
+        latest_file = self.root / experiment_id / "latest_run.txt"
+        latest_file.write_text(run_id, encoding="utf-8")
         return run_dir
 
     def log_config(self, run_dir: Path, config: dict[str, Any]) -> None:
@@ -55,3 +62,8 @@ class ExperimentTracker:
         payload["created_at"] = utc_now_iso()
         with (run_dir / "result.json").open("w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2)
+
+    def _make_run_id(self) -> str:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        suffix = uuid4().hex[:8]
+        return f"{timestamp}-{suffix}"

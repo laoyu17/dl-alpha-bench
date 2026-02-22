@@ -38,8 +38,14 @@ class EventBacktester:
             grp = grp.dropna(subset=[score_col, ret_col])
             if grp.empty:
                 continue
+            if len(grp) < 2:
+                continue
 
-            n = max(1, int(len(grp) * self.top_frac))
+            # Keep long/short sleeves disjoint even when top_frac is large.
+            max_pairs = len(grp) // 2
+            n = min(max(1, int(len(grp) * self.top_frac)), max_pairs)
+            if n <= 0:
+                continue
             ranked = grp.sort_values(score_col, ascending=False)
             long_part = ranked.head(n)
             short_part = ranked.tail(n)
