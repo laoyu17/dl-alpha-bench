@@ -1,0 +1,33 @@
+experiment_id: sample-wf-exp
+seed: 2026
+
+data:
+  source: mock
+  start: "2021-01-01"
+  end: "2022-12-31"
+  periods: 500
+  freq: "1d"
+  symbols: ["AAA", "BBB", "CCC", "DDD", "EEE"]
+
+dataset:
+  feature_generators: ["ret_1", "ret_5", "vol_z", "spread"]
+  feature_columns: ["feat_ret_1", "feat_ret_5", "feat_vol_z", "feat_spread"]
+  label_horizons: [1]
+
+cv:
+  method: "walk_forward"
+  train_window: 150
+  valid_window: 30
+  step: 30
+
+train:
+  hidden_dim: 16
+  lr: 0.01
+  epochs: 40
+
+backtest:
+  top_frac: 0.3
+  trading_cost: 0.001
+runtime:
+  fail_on_leakage: true
+  validate_config_only: false

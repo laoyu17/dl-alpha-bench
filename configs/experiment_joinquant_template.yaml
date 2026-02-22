@@ -1,0 +1,45 @@
+experiment_id: jq-template
+seed: 2026
+
+data:
+  source: joinquant
+  start: "2023-01-01"
+  end: "2023-12-31"
+  freq: "1d"
+  symbols: ["000001.XSHE", "600000.XSHG"]
+  user_env: "JOINQUANT_USER"
+  password_env: "JOINQUANT_PASSWORD"
+  min_interval_sec: 0.25
+  max_retries: 3
+  base_delay_sec: 0.5
+  max_delay_sec: 4.0
+  fields: ["open", "high", "low", "close", "volume", "money", "paused"]
+
+dataset:
+  strict_feature_requirements: true
+  feature_generators: ["ret_1", "ret_5", "vol_z", "spread"]
+  feature_columns: ["feat_ret_1", "feat_ret_5", "feat_vol_z", "feat_spread"]
+  label_horizons: [1]
+
+cv:
+  method: purged_kfold
+  n_splits: 5
+  embargo: 1
+
+train:
+  hidden_dim: 32
+  lr: 0.01
+  epochs: 80
+
+eval:
+  explainability:
+    enabled: true
+    n_quantiles: 5
+    top_k: 10
+
+backtest:
+  top_frac: 0.2
+  trading_cost: 0.001
+runtime:
+  fail_on_leakage: true
+  validate_config_only: false

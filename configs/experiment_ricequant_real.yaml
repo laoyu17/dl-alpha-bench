@@ -1,0 +1,78 @@
+experiment_id: ricequant-real-hf
+seed: 2026
+
+data:
+  source: ricequant
+  start: "2024-01-02"
+  end: "2024-03-29"
+  freq: "1m"
+  symbols: ["000001.XSHE", "000333.XSHE", "600519.XSHG", "601318.XSHG"]
+  token_env: "RICEQUANT_TOKEN"
+  user_env: "RICEQUANT_USER"
+  password_env: "RICEQUANT_PASSWORD"
+  min_interval_sec: 0.2
+  max_retries: 4
+  base_delay_sec: 0.5
+  max_delay_sec: 6.0
+  fields:
+    - open
+    - high
+    - low
+    - close
+    - volume
+    - total_turnover
+    - bid_price1
+    - ask_price1
+    - bid_size1
+    - ask_size1
+    - trade_count
+
+dataset:
+  strict_feature_requirements: false
+  feature_generators:
+    - ret_1
+    - spread
+    - obi_l1
+    - trade_intensity
+    - short_vol
+    - microprice_bias
+    - ofi_l1
+  feature_params:
+    trade_intensity_window: 30
+    short_vol_window: 40
+    ofi_window: 20
+  feature_columns:
+    - feat_ret_1
+    - feat_spread
+    - feat_obi_l1
+    - feat_trade_intensity
+    - feat_short_vol
+    - feat_microprice_bias
+    - feat_ofi_l1
+  label_horizons: [10]
+  label_price_col: "close"
+  mask_column: "tradable"
+
+cv:
+  method: "purged_kfold"
+  n_splits: 5
+  embargo: 10
+
+train:
+  hidden_dim: 64
+  lr: 0.005
+  epochs: 100
+  l2: 0.0001
+
+eval:
+  explainability:
+    enabled: true
+    n_quantiles: 5
+    top_k: 20
+
+backtest:
+  top_frac: 0.15
+  trading_cost: 0.0012
+runtime:
+  fail_on_leakage: true
+  validate_config_only: false

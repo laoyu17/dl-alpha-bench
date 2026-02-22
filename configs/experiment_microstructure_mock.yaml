@@ -1,0 +1,62 @@
+experiment_id: microstructure-mock-exp
+seed: 2026
+
+data:
+  source: mock
+  start: "2024-01-02"
+  end: "2024-02-20"
+  periods: 3000
+  freq: "1m"
+  symbols: ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
+
+# 高频微观结构特征示例
+# mock 数据会自动生成 bid/ask 深度与 trade_count 字段
+dataset:
+  strict_feature_requirements: true
+  feature_generators:
+    - ret_1
+    - spread
+    - obi_l1
+    - trade_intensity
+    - short_vol
+    - microprice_bias
+    - ofi_l1
+  feature_params:
+    trade_intensity_window: 30
+    short_vol_window: 40
+    ofi_window: 20
+  feature_columns:
+    - feat_ret_1
+    - feat_spread
+    - feat_obi_l1
+    - feat_trade_intensity
+    - feat_short_vol
+    - feat_microprice_bias
+    - feat_ofi_l1
+  label_horizons: [10]
+  label_price_col: "close"
+  mask_column: "tradable"
+
+cv:
+  method: "purged_kfold"
+  n_splits: 5
+  embargo: 10
+
+train:
+  hidden_dim: 64
+  lr: 0.005
+  epochs: 80
+  l2: 0.0001
+
+eval:
+  explainability:
+    enabled: true
+    n_quantiles: 5
+    top_k: 20
+
+backtest:
+  top_frac: 0.15
+  trading_cost: 0.0012
+runtime:
+  fail_on_leakage: true
+  validate_config_only: false
