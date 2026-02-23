@@ -2,6 +2,8 @@
 
 金融专用、可防数据泄露的深度学习量化实验框架（非通用 DL 框架）。
 
+![GUI demo](docs/assets/readme/ui-demo.gif)
+
 ## Why this project
 
 `dl-alpha-bench` 面向量化研究实习场景，突出三件事：
@@ -51,6 +53,31 @@ dl-alpha-bench --config configs/experiment_ricequant_real.yaml
 ```bash
 pip install -e .[gui,plot]
 dl-alpha-bench-gui
+```
+
+## UI Demo
+
+演示主线：选择 mock 配置 -> 一键运行实验 -> 查看 Monitor/Backtest/Explainability/Compare。
+
+![Experiment page](docs/assets/readme/ui-01-experiment.png)
+Experiment：选择配置并启动实验。
+
+![Monitor page](docs/assets/readme/ui-02-monitor.png)
+Monitor：查看运行日志与 `status/failure_reason`。
+
+![Backtest page](docs/assets/readme/ui-03-backtest.png)
+Backtest：查看回测核心指标。
+
+![Explainability page](docs/assets/readme/ui-04-explainability.png)
+Explainability：查看因子 IC/RankIC 与分位收益贡献。
+
+![Compare page](docs/assets/readme/ui-05-compare.png)
+Compare：对比历史实验的 IC 与 Sharpe。
+
+重新生成 README 演示素材：
+
+```bash
+python scripts/generate_readme_ui_assets.py
 ```
 
 ## Repo

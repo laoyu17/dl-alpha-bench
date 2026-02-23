@@ -20,3 +20,18 @@
 - 暗色专业风格
 - 高信息密度但不拥挤
 - 一键启动 + 可追踪 + 可回看
+
+## README 演示素材规范
+
+- README 首屏使用短 GIF：`docs/assets/readme/ui-demo.gif`
+- README `UI Demo` 章节使用 5 张截图：
+  - `ui-01-experiment.png`
+  - `ui-02-monitor.png`
+  - `ui-03-backtest.png`
+  - `ui-04-explainability.png`
+  - `ui-05-compare.png`
+- 素材通过脚本统一生成，避免手工截图风格漂移：
+
+```bash
+python scripts/generate_readme_ui_assets.py
+```

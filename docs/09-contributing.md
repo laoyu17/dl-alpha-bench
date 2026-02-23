@@ -26,3 +26,14 @@ cp .env.example .env
 - 保持函数单一职责
 - 配置优先，避免硬编码
 - 所有时间逻辑明确时区和排序
+
+## 文档与演示素材同步
+
+- 若改动 GUI 页面结构或展示字段，需要同步更新 README 的 `UI Demo` 区域
+- README 演示素材统一由脚本生成：
+
+```bash
+python scripts/generate_readme_ui_assets.py
+```
+
+- 生成结果位于 `docs/assets/readme/`，提交 PR 前请确认图片路径可用、无敏感信息

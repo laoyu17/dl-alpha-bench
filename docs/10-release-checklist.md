@@ -8,6 +8,7 @@
 - [ ] 示例配置可跑通并生成 artifacts
 - [ ] 联机 smoke（有凭证时）通过，或缺凭证时明确 skip 记录
 - [ ] GUI 基础行为测试通过（配置摘要刷新、指标表填充）
+- [ ] README 演示素材已更新（`python scripts/generate_readme_ui_assets.py`），GIF/截图路径可用
 - [ ] README 与 docs 同步更新
 - [ ] `.env` 未泄露凭证
 - [ ] 发布说明包含主要变更与已知限制
