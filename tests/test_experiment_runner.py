@@ -206,6 +206,100 @@ def test_runner_rejects_invalid_boolean_fields() -> None:
         ExperimentRunner().run(cfg)
 
 
+def test_runner_rejects_non_dict_runtime_eval_sections() -> None:
+    cfg = load_yaml("configs/experiment_sample.yaml")
+    cfg["runtime"] = 0
+    with pytest.raises(ConfigValidationError, match="config.runtime must be a dict"):
+        ExperimentRunner().run(cfg)
+
+    cfg = load_yaml("configs/experiment_sample.yaml")
+    cfg["eval"] = 0
+    with pytest.raises(ConfigValidationError, match="config.eval must be a dict"):
+        ExperimentRunner().run(cfg)
+
+    cfg = load_yaml("configs/experiment_sample.yaml")
+    cfg["eval"] = {"explainability": []}
+    with pytest.raises(ConfigValidationError, match="config.eval.explainability must be a dict"):
+        ExperimentRunner().run(cfg)
+
+
+def _run_with_explainability_capture(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    experiment_id: str,
+    mode: str | None,
+) -> tuple[dict[str, Any], Any]:
+    observed: dict[str, Any] = {}
+
+    def _capture_explainability(
+        frame: pd.DataFrame,
+        feature_columns: list[str],
+        label_column: str,
+        timestamp_column: str = "timestamp",
+        n_quantiles: int = 5,
+    ) -> list[dict[str, Any]]:
+        observed["n_rows"] = len(frame)
+        observed["has_pred_score"] = "pred_score" in frame.columns
+        observed["pred_score_has_nan"] = (
+            bool(frame["pred_score"].isna().any()) if "pred_score" in frame.columns else None
+        )
+        observed["feature_columns"] = list(feature_columns)
+        observed["label_column"] = label_column
+        observed["timestamp_column"] = timestamp_column
+        observed["n_quantiles"] = n_quantiles
+        return [{"feature": feature_columns[0], "n_obs": len(frame)}]
+
+    monkeypatch.setattr(runner_module, "summarize_feature_explainability", _capture_explainability)
+
+    cfg = load_yaml("configs/experiment_sample.yaml")
+    cfg["experiment_id"] = experiment_id
+    cfg["data"]["periods"] = 140
+    cfg["cv"] = {
+        "method": "walk_forward",
+        "train_window": 40,
+        "valid_window": 10,
+        "step": 10,
+    }
+    if mode is not None:
+        cfg["eval"]["explainability"]["mode"] = mode
+
+    result = ExperimentRunner().run(cfg)
+    return observed, result
+
+
+def test_runner_explainability_uses_oos_samples_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oos_observed, oos_result = _run_with_explainability_capture(
+        monkeypatch,
+        experiment_id="pytest-exp-explain-oos",
+        mode=None,
+    )
+    in_sample_observed, _ = _run_with_explainability_capture(
+        monkeypatch,
+        experiment_id="pytest-exp-explain-in-sample-ref",
+        mode="in_sample",
+    )
+
+    assert oos_result.feature_explainability_mode == "oos"
+    assert oos_observed["has_pred_score"] is True
+    assert oos_observed["pred_score_has_nan"] is False
+    assert oos_observed["n_rows"] < in_sample_observed["n_rows"]
+
+
+def test_runner_explainability_in_sample_mode_keeps_historical_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed, result = _run_with_explainability_capture(
+        monkeypatch,
+        experiment_id="pytest-exp-explain-in-sample",
+        mode="in_sample",
+    )
+
+    assert result.feature_explainability_mode == "in_sample"
+    assert observed["has_pred_score"] is False
+
+
 def test_runner_fallback_to_mock_when_online_connector_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

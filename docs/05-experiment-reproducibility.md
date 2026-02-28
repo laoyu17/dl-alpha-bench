@@ -26,6 +26,7 @@
 - `fallback_reason`（触发降级时记录原因）
 - `metrics`
 - `feature_explainability`（每因子 IC/RankIC/分位收益贡献）
+- `feature_explainability_mode`（`oos` 或 `in_sample`，用于标记 explainability 统计口径）
 - `backtest`
 - `leakage_passed`
 
@@ -36,7 +37,22 @@
 - `runtime.validate_config_only=true` 用于 preflight 校验，不进入训练阶段
 - `runtime.allow_offline_mock_fallback=true` 时，`joinquant/ricequant` 拉取失败会降级为本地 mock 数据并继续运行（结果记录 `fallback_*` 字段）
 
+## Explainability 复现口径（新增）
+
+- 默认 `eval.explainability.mode=oos`，只使用 OOS 验证样本统计 explainability
+- 兼容口径 `eval.explainability.mode=in_sample` 可用于历史结果对齐
+- 建议在复现实验时同时固定 `seed` 与 `feature_explainability_mode`
+
 ## 推荐实践
 
 - 关键实验固定 seed + 固定依赖版本
 - 每次对外展示都附配置文件
+
+## 联机连接器证据闭环（新增）
+
+- 真实连接器 smoke 采用 env-gated 机制：无凭证/无 SDK 时允许 `skip`，但必须记录 `skip` 原因
+- 发布前需补一份标准化联机验证记录，模板见：`docs/live-connectors-validation-template.md`
+- 推荐至少记录：
+  - JoinQuant：`JOINQUANT_USER/JOINQUANT_PASSWORD` 与 `jqdatasdk` 检查结论
+  - RiceQuant：`RICEQUANT_TOKEN` 或 `RICEQUANT_USER/RICEQUANT_PASSWORD` 与 `rqdatac` 检查结论
+  - 对应 smoke 用例结果：`pass/skip/fail`

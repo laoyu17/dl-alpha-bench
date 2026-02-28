@@ -30,6 +30,7 @@ from .tracker import ExperimentResult, ExperimentTracker
 
 _ALLOWED_DATA_SOURCES = {"csv", "mock", "joinquant", "ricequant"}
 _ALLOWED_CV_METHODS = {"purged_kfold", "walk_forward"}
+_ALLOWED_EXPLAINABILITY_MODES = {"oos", "in_sample"}
 
 
 class ExperimentRunner:
@@ -66,6 +67,18 @@ class ExperimentRunner:
             runtime_cfg.get("allow_offline_mock_fallback"),
             field_name="runtime.allow_offline_mock_fallback",
             default=False,
+        )
+        eval_cfg = config.get("eval") or {}
+        explain_cfg = eval_cfg.get("explainability") or {}
+        explain_enabled = self._parse_bool(
+            explain_cfg.get("enabled"),
+            field_name="eval.explainability.enabled",
+            default=True,
+        )
+        explain_mode = self._parse_explainability_mode(
+            explain_cfg.get("mode"),
+            field_name="eval.explainability.mode",
+            default="oos",
         )
         source = str(config.get("data", {}).get("source", "mock"))
         fallback_used = False
@@ -104,6 +117,7 @@ class ExperimentRunner:
                 leakage_passed=True,
                 leakage_details=[],
                 failure_reason="validate_config_only",
+                feature_explainability_mode=explain_mode,
                 fallback_used=fallback_used,
                 fallback_reason=fallback_reason,
             )
@@ -186,6 +200,7 @@ class ExperimentRunner:
                 leakage_passed=False,
                 leakage_details=leakage_details,
                 failure_reason=failure_reason,
+                feature_explainability_mode=explain_mode,
                 fallback_used=fallback_used,
                 fallback_reason=fallback_reason,
             )
@@ -210,17 +225,22 @@ class ExperimentRunner:
         fold_results = trainer.fit_cv(x, y, splits)
         metric_summary = summarize_fold_metrics(fold_results)
         self._emit("training complete")
-        explain_cfg = config.get("eval", {}).get("explainability", {})
-        explain_enabled = self._parse_bool(
-            explain_cfg.get("enabled"),
-            field_name="eval.explainability.enabled",
-            default=True,
-        )
+
+        pred_col = "pred_score"
+        valid_frame = dataset.frame.copy()
+        valid_frame[pred_col] = np.nan
+        for fold, split in zip(fold_results, splits):
+            valid_frame.loc[split.valid_idx, pred_col] = fold.valid_pred
+        oos_frame = valid_frame.dropna(subset=[pred_col])
+
         feature_explainability: list[dict[str, Any]] = []
         if explain_enabled:
-            self._emit("computing feature explainability")
+            explain_frame = oos_frame if explain_mode == "oos" else dataset.frame
+            self._emit(
+                f"computing feature explainability (mode={explain_mode}, rows={len(explain_frame)})"
+            )
             feature_explainability = summarize_feature_explainability(
-                frame=dataset.frame,
+                frame=explain_frame,
                 feature_columns=dataset.feature_columns,
                 label_column=dataset.label_columns[0],
                 timestamp_column="timestamp",
@@ -230,13 +250,9 @@ class ExperimentRunner:
             if top_k is not None:
                 feature_explainability = feature_explainability[: max(1, int(top_k))]
             self.tracker.log_explainability(run_dir, feature_explainability)
-            self._emit(f"explainability saved ({len(feature_explainability)} feature rows)")
-
-        pred_col = "pred_score"
-        valid_frame = dataset.frame.copy()
-        valid_frame[pred_col] = np.nan
-        for fold, split in zip(fold_results, splits):
-            valid_frame.loc[split.valid_idx, pred_col] = fold.valid_pred
+            self._emit(
+                f"explainability saved ({len(feature_explainability)} feature rows, mode={explain_mode})"
+            )
 
         back_cfg = config.get("backtest", {})
         backtester = EventBacktester(
@@ -245,7 +261,7 @@ class ExperimentRunner:
         )
         self._emit("running backtest")
         back_summary = backtester.run(
-            valid_frame.dropna(subset=[pred_col]),
+            oos_frame,
             pred_col,
             dataset.label_columns[0],
         )
@@ -261,6 +277,7 @@ class ExperimentRunner:
             seed=seed,
             metrics=metrics,
             feature_explainability=feature_explainability,
+            feature_explainability_mode=explain_mode,
             leakage_passed=leakage_passed,
             leakage_details=leakage_details,
             backtest={k: float(v) for k, v in asdict(back_summary).items()},
@@ -362,8 +379,10 @@ class ExperimentRunner:
                     "walk_forward requires train_window/valid_window/step to be positive"
                 )
 
-        runtime_cfg = config.get("runtime", {})
-        if runtime_cfg and not isinstance(runtime_cfg, dict):
+        runtime_cfg = config.get("runtime")
+        if runtime_cfg is None:
+            runtime_cfg = {}
+        elif not isinstance(runtime_cfg, dict):
             raise ConfigValidationError("config.runtime must be a dict when provided")
         self._parse_bool(
             runtime_cfg.get("fail_on_leakage"),
@@ -392,16 +411,25 @@ class ExperimentRunner:
             default=True,
         )
 
-        eval_cfg = config.get("eval", {})
-        if eval_cfg and not isinstance(eval_cfg, dict):
+        eval_cfg = config.get("eval")
+        if eval_cfg is None:
+            eval_cfg = {}
+        elif not isinstance(eval_cfg, dict):
             raise ConfigValidationError("config.eval must be a dict when provided")
-        explain_cfg = eval_cfg.get("explainability", {})
-        if explain_cfg and not isinstance(explain_cfg, dict):
+        explain_cfg = eval_cfg.get("explainability")
+        if explain_cfg is None:
+            explain_cfg = {}
+        elif not isinstance(explain_cfg, dict):
             raise ConfigValidationError("config.eval.explainability must be a dict when provided")
         self._parse_bool(
             explain_cfg.get("enabled"),
             field_name="eval.explainability.enabled",
             default=True,
+        )
+        self._parse_explainability_mode(
+            explain_cfg.get("mode"),
+            field_name="eval.explainability.mode",
+            default="oos",
         )
 
     def _validate_loaded_data(self, frame: pd.DataFrame, source: str) -> None:
@@ -429,6 +457,24 @@ class ExperimentRunner:
         except ValueError as exc:
             raise ConfigValidationError(str(exc)) from exc
 
+    def _parse_explainability_mode(
+        self,
+        value: Any,
+        *,
+        field_name: str,
+        default: str,
+    ) -> str:
+        if value is None:
+            return default
+        if not isinstance(value, str):
+            allowed = ", ".join(sorted(_ALLOWED_EXPLAINABILITY_MODES))
+            raise ConfigValidationError(f"{field_name} must be one of: {allowed}")
+        mode = value.strip().lower()
+        if mode not in _ALLOWED_EXPLAINABILITY_MODES:
+            allowed = ", ".join(sorted(_ALLOWED_EXPLAINABILITY_MODES))
+            raise ConfigValidationError(f"{field_name} must be one of: {allowed}")
+        return mode
+
     def _make_blocked_result(
         self,
         experiment_id: str,
@@ -438,6 +484,7 @@ class ExperimentRunner:
         leakage_passed: bool,
         leakage_details: list[str],
         failure_reason: str,
+        feature_explainability_mode: str,
         fallback_used: bool = False,
         fallback_reason: str | None = None,
     ) -> ExperimentResult:
@@ -447,6 +494,7 @@ class ExperimentRunner:
             seed=seed,
             metrics={},
             feature_explainability=[],
+            feature_explainability_mode=feature_explainability_mode,
             leakage_passed=leakage_passed,
             leakage_details=leakage_details,
             backtest={},

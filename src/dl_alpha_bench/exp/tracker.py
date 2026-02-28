@@ -21,6 +21,7 @@ class ExperimentResult:
     seed: int
     metrics: dict[str, float]
     feature_explainability: list[dict[str, Any]]
+    feature_explainability_mode: str
     leakage_passed: bool
     leakage_details: list[str]
     backtest: dict[str, float]

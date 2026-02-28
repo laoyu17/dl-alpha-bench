@@ -39,6 +39,13 @@
 - `runtime.validate_config_only`：默认 `false`，设为 `true` 时仅做配置与数据契约检查并输出 blocked 结果
 - `runtime.allow_offline_mock_fallback`：默认 `false`，仅在 `joinquant/ricequant` 拉取失败时允许降级到本地 mock 数据
 
+## 可解释性口径契约（新增）
+
+- `eval.explainability.mode` 支持：
+  - `oos`（默认）：仅基于各 fold 验证集样本统计 `feature_explainability`
+  - `in_sample`：基于完整数据集统计（兼容历史口径）
+- `result.json` 会输出 `feature_explainability_mode`，用于审计与复现 explainability 口径
+
 ## 高频特征输入约束
 
 - `obi_l1` 依赖：`bid_size1`, `ask_size1`
