@@ -6,7 +6,7 @@
 
 ## Why this project
 
-`dl-alpha-bench` 面向量化研究实习场景，突出三件事：
+`dl-alpha-bench` 面向量化研究场景，突出：
 
 1. Purged/Embargo Cross Validation（防时间泄露）
 2. Walk-forward 训练验证（滚动窗口）
